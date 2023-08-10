@@ -303,6 +303,7 @@ namespace xc::renderer {
     }
 
     auto uninitialize() -> void {
+        destroy_shader(shader);
         glDisable(GL_BLEND);
         glDeleteBuffers(1, &ibo);
         glDeleteBuffers(1, &vbo);
@@ -425,13 +426,13 @@ namespace xc::renderer {
         auto texture = texture_t{0u, static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
 
         GL_CALL(glGenTextures(1, &texture.id));
-        bind_texture(texture);
-
+        GL_CALL(glBindTexture(GL_TEXTURE_2D, texture.id));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
-        GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA8, GL_UNSIGNED_BYTE, image));
+        GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image));
+        GL_CALL(glGenerateMipmap(GL_TEXTURE_2D));
         GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
 
         stbi_image_free(image);
@@ -448,11 +449,11 @@ namespace xc::renderer {
     }
 
     auto draw_texture(texture_t texture, rectangle_t region, glm::vec2 position, float angle, float scale) -> void {
-        //if (bound_texture != texture.id) {
-       //     finish();
-       //     bind_texture(texture);
-       //     bound_texture = texture.id;
-        //}
+        if (bound_texture != texture.id) {
+           finish();
+            bind_texture(texture);
+            bound_texture = texture.id;
+        }
 
         auto mvp = glm::mat3(1.f);
         mvp = glm::translate(mvp, position);
@@ -471,9 +472,5 @@ namespace xc::renderer {
         vertices.emplace_back(vertex_t{mvp * glm::vec3(region.w, region.h, 1.f), glm::vec2(right_uv, bottom_uv)});
 
         batch_count += 1u;
-
-        bind_texture(texture);
-        finish();
-
     }
 } // namespace xc::renderer

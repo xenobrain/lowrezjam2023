@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.25)
 project(HyperspaceRescue VERSION 0.0.1)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -31,7 +31,7 @@ file(GLOB_RECURSE engine_HEADERS source/engine/*.h)
 file(GLOB_RECURSE engine_SOURCES source/engine/*.cpp)
 add_library(engine ${engine_HEADERS} ${engine_SOURCES})
 target_include_directories(engine PRIVATE ${COMMON_INCLUDES} ${stb_SOURCE_DIR})
-target_link_libraries(engine PRIVATE SDL2::SDL2)
+target_link_libraries(engine PRIVATE SDL2::SDL2-static)
 
 
 # Build Game Executable ################################################################################################
