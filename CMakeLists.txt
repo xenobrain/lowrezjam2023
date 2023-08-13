@@ -21,23 +21,26 @@ include(${CPM_DOWNLOAD_LOCATION})
 # Install Libraries ####################################################################################################
 CPMAddPackage("gh:nothings/stb#5736b15f7ea0ffb08dd38af21067c314d6a3aae9")
 CPMAddPackage("gh:libsdl-org/SDL#release-2.28.2")
-CPMAddPackage("gh:g-truc/glm#0.9.9.8")
+CPMAddPackage("gh:freetype/freetype#VER-2-13-0")
+CPMAddPackage("gh:mackron/miniaudio#0.11.18")
 
-set(COMMON_INCLUDES source ${glm_SOURCE_DIR})
+add_library(Freetype::Freetype ALIAS freetype)
+
+set(COMMON_INCLUDES source)
 
 
 # Build Engine Library #################################################################################################
 file(GLOB_RECURSE engine_HEADERS source/engine/*.h)
 file(GLOB_RECURSE engine_SOURCES source/engine/*.cpp)
 add_library(engine ${engine_HEADERS} ${engine_SOURCES})
-target_include_directories(engine PRIVATE ${COMMON_INCLUDES} ${stb_SOURCE_DIR})
-target_link_libraries(engine PRIVATE SDL2::SDL2-static)
+target_include_directories(engine PRIVATE ${COMMON_INCLUDES} ${stb_SOURCE_DIR} ${miniaudio_SOURCE_DIR})
+target_link_libraries(engine PRIVATE SDL2::SDL2-static freetype)
 
 
 # Build Game Executable ################################################################################################
 file(GLOB_RECURSE game_HEADERS source/game/*.h)
 file(GLOB_RECURSE game_SOURCES source/game/*.cpp)
 add_executable(HyperspaceRescue ${game_HEADERS} ${game_SOURCES})
-target_include_directories(HyperspaceRescue PRIVATE ${COMMON_INCLUDES})
+target_include_directories(HyperspaceRescue PRIVATE ${COMMON_INCLUDES} ${stb_SOURCE_DIR})
 target_link_libraries(HyperspaceRescue PRIVATE engine)
 

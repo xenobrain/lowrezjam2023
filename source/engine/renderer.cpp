@@ -3,14 +3,10 @@
 
 #include <engine/renderer.h>
 
-#include <vector>
-
 #include <SDL.h>
-#include <glm/vec2.hpp>
-#include <glm/vec4.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/gtx/matrix_transform_2d.hpp>
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -19,7 +15,7 @@
 void static* library;
 extern SDL_Window* sdl_window;
 SDL_GLContext static gl_context;
-
+FT_Library static freetype_library;
 
 #pragma region OpenGL Loader
 
@@ -51,6 +47,9 @@ using GLintptr    = std::int64_t;
 #define GL_UNSIGNED_BYTE			    0x1401
 #define GL_UNSIGNED_SHORT			    0x1403
 
+// Color
+#define GL_ALPHA				        0x1906
+
 // Blending
 #define GL_BLEND                        0x0BE2
 #define GL_SRC_ALPHA                    0x0302
@@ -60,8 +59,11 @@ using GLintptr    = std::int64_t;
 #define GL_COLOR_BUFFER_BIT             0x00004000
 
 // Buffer Handling
+#define GL_FRAMEBUFFER                  0x8D40
 #define GL_ARRAY_BUFFER                 0x8892
 #define GL_ELEMENT_ARRAY_BUFFER         0x8893
+#define GL_COLOR_ATTACHMENT0            0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE         0x8CD5
 
 // Drawing
 #define GL_STATIC_DRAW                  0x88E4
@@ -135,6 +137,11 @@ GL_EXTENSION(void, Viewport, GLint x, GLint y, GLsizei width, GLsizei height) \
 /* Buffer and Clearing */ \
 GL_EXTENSION(void, Clear, GLbitfield mask) \
 GL_EXTENSION(void, ClearColor, GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) \
+/* Framebuffer */ \
+GL_EXTENSION(void, GenFramebuffers, GLsizei n, GLuint *ids) \
+GL_EXTENSION(void, BindFramebuffer, GLenum target, GLuint framebuffer)        \
+GL_EXTENSION(void, FramebufferTexture2D, GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) \
+GL_EXTENSION(GLenum, CheckFramebufferStatus, GLenum target) \
 /* Vertex array handling */ \
 GL_EXTENSION(void, GenVertexArrays, GLsizei n, GLuint *arrays) \
 GL_EXTENSION(void, DeleteVertexArrays, GLsizei n, const GLuint *arrays) \
@@ -201,6 +208,8 @@ auto static create_context() -> bool {
         return false;
     }
 
+    SDL_GL_SetSwapInterval(1);
+
     SDL_GL_LoadLibrary(nullptr);
 
     #define GL_EXTENSION(ret, name, ...) \
@@ -217,7 +226,7 @@ auto static create_context() -> bool {
 
 
 #pragma region Renderer Structs
-struct vertex_t { glm::vec2 position, texcoord; };
+struct vertex_t { xc::vector2_t position, texcoord; };
 #pragma endregion Renderer Structs
 
 
@@ -231,25 +240,30 @@ auto static constexpr MAX_VERTICES = VERTICES_PER_QUAD * MAX_BATCHES;
 
 
 #pragma region Renderer Locals
-std::vector<vertex_t> vertices;
-std::uint32_t vbo, ibo, vao, shader;
-std::uint32_t bound_texture, batch_count;
+vertex_t vertices[MAX_VERTICES];
+std::uint32_t num_vertices;
+
+std::uint32_t vbo, ibo, vao, fbo, shader;
+std::uint32_t bound_texture, fbo_texture, batch_count;
+
+FT_Face static default_face;
+
+xc::vector2_t static scene_camera;
 #pragma endregion Renderer Locals
 
 
 auto static set_view_bounds(float width, float height) -> void {
-    auto projection = glm::ortho(0.f, width, 0.f, height, -1.f, 1.f);
     xc::renderer::bind_shader(shader);
-    xc::renderer::set_shader_uniform(shader, "projection", projection);
+    xc::renderer::set_shader_uniform(shader, "projection", xc::orthographic(0.f, width, 0.f, height, -1.f, 1.f));
 }
 
-auto static finish() -> void {
-    if (vertices.empty()) return;
+auto static flush() -> void {
+    if (num_vertices == 0u) return;
 
-    GL_CALL(glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(vertex_t), vertices.data()));
+    GL_CALL(glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices));
     GL_CALL(glDrawElements(GL_TRIANGLES, batch_count * INDICES_PER_QUAD, GL_UNSIGNED_SHORT, nullptr));
 
-    vertices.clear();
+    num_vertices = 0u;
     batch_count = 0u;
 }
 
@@ -258,25 +272,35 @@ namespace xc::renderer {
     auto initialize(std::uint32_t width, std::uint32_t height) -> bool {
         if (!create_context()) return false;
 
+        // Load Freetype and default font face
+        if (FT_Init_FreeType(&freetype_library)) {
+            SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Could not load the Freetype Library");
+            return false;
+        }
+
+        if (FT_New_Face(freetype_library, "../assets/5px.ttf", 0, &default_face)) {
+            SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Could not load default font face");
+            return false;
+        }
+        FT_Set_Pixel_Sizes(default_face, 0, 5);
+
+        // Load Shader
         shader = create_shader("../assets/shaders/vertex.vsh", "../assets/shaders/fragment.fsh");
 
-        vertices.reserve(MAX_VERTICES);
-
+        // Setup modes and projection
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
         set_view_bounds(static_cast<float>(width), static_cast<float>(height));
 
-
-        std::vector<std::uint16_t> indices;
-        indices.reserve(MAX_INDICES);
+        // Create quad Geometry
+        std::uint16_t indices[MAX_INDICES];
         for (auto i = 0u; i < MAX_BATCHES; ++i) {
-            indices.emplace_back(i * VERTICES_PER_QUAD + 0u);
-            indices.emplace_back(i * VERTICES_PER_QUAD + 1u);
-            indices.emplace_back(i * VERTICES_PER_QUAD + 2u);
-            indices.emplace_back(i * VERTICES_PER_QUAD + 2u);
-            indices.emplace_back(i * VERTICES_PER_QUAD + 1u);
-            indices.emplace_back(i * VERTICES_PER_QUAD + 3u);
+            indices[i * 6u + 0u] = i * VERTICES_PER_QUAD + 0u;
+            indices[i * 6u + 1u] = i * VERTICES_PER_QUAD + 1u;
+            indices[i * 6u + 2u] = i * VERTICES_PER_QUAD + 2u;
+            indices[i * 6u + 3u] = i * VERTICES_PER_QUAD + 2u;
+            indices[i * 6u + 4u] = i * VERTICES_PER_QUAD + 1u;
+            indices[i * 6u + 5u] = i * VERTICES_PER_QUAD + 3u;
         }
 
 
@@ -285,29 +309,68 @@ namespace xc::renderer {
 
         GL_CALL(glGenBuffers(1, &vbo));
         GL_CALL(glBindBuffer(GL_ARRAY_BUFFER, vbo));
-        GL_CALL(glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_t) * vertices.capacity(), nullptr, GL_STREAM_DRAW));
+        GL_CALL(glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), nullptr, GL_STREAM_DRAW));
 
         GL_CALL(glGenBuffers(1, &ibo));
         GL_CALL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo));
-        GL_CALL(glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(std::uint16_t) * MAX_INDICES, indices.data(), GL_STATIC_DRAW));
+        GL_CALL(glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW));
 
         auto position_attribute = 0u;
         GL_CALL(glEnableVertexAttribArray(position_attribute));
-        GL_CALL(glVertexAttribPointer(position_attribute, glm::vec2::length(), GL_FLOAT, GL_FALSE, sizeof(vertex_t), reinterpret_cast<void*>(0)));
+        GL_CALL(glVertexAttribPointer(position_attribute, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), reinterpret_cast<void*>(0)));
 
         auto texcoord_attribute = 1u;
         GL_CALL(glEnableVertexAttribArray(texcoord_attribute));
-        GL_CALL(glVertexAttribPointer(texcoord_attribute, glm::vec2::length(), GL_FLOAT, GL_FALSE, sizeof(vertex_t), reinterpret_cast<void*>(glm::vec2::length() * sizeof(float))));
+        GL_CALL(glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), reinterpret_cast<void*>(2 * sizeof(float))));
+
+
+
+        /*
+        // Generate and bind FBO
+        GL_CALL(glGenFramebuffers(1, &fbo));
+        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
+
+        // Generate and attach a texture to the FBO
+        GL_CALL(glGenTextures(1, &fbo_texture));
+        GL_CALL(glBindTexture(GL_TEXTURE_2D, fbo_texture));
+        GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+        GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
+        GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
+        GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbo_texture, 0));
+
+
+         // Check FBO status
+         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+             SDL_LogError(SDL_LOG_CATEGORY_RENDER, "FBO Error");
+         }
+
+         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+         */
 
         return true;
     }
 
     auto uninitialize() -> void {
+        FT_Done_Face(default_face);
+        FT_Done_FreeType(freetype_library);
         destroy_shader(shader);
         glDisable(GL_BLEND);
         glDeleteBuffers(1, &ibo);
         glDeleteBuffers(1, &vbo);
         glDeleteVertexArrays(1, &vao);
+        // delete framebuffer
+    }
+
+    auto begin() -> void {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, 64,  64);
+    }
+
+    auto end() -> void {
+        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+        glViewport(0, 0, 640, 640);
+
+        draw_texture({fbo_texture, 64, 64}, {0u, 0u, 64u, 64u}, {0.f, 0.f}, 0.f, 1.f);
     }
 
     auto tick() -> void {
@@ -321,6 +384,10 @@ namespace xc::renderer {
 
     auto swap() -> void {
         SDL_GL_SwapWindow(sdl_window);
+    }
+
+    auto set_camera(vector2_t camera) -> void {
+        scene_camera = camera;
     }
 
     auto create_shader(char const* vertex_shader_path, char const* fragment_shader_path) -> std::uint32_t {
@@ -408,11 +475,11 @@ namespace xc::renderer {
     }
 
     auto bind_shader(std::uint32_t shader) -> void {
-        glUseProgram(shader);
+        GL_CALL(glUseProgram(shader));
     }
 
-    auto set_shader_uniform(std::uint32_t shader, char const* name, glm::mat4 value) -> void {
-        glUniformMatrix4fv(glGetUniformLocation(shader, name), 1, GL_FALSE, glm::value_ptr(value));
+    auto set_shader_uniform(std::uint32_t shader, char const* name, matrix4_t value) -> void {
+        GL_CALL(glUniformMatrix4fv(glGetUniformLocation(shader, name), 1, GL_FALSE, reinterpret_cast<float*>(&value)));
     }
 
     auto create_texture(char const* path) -> texture_t {
@@ -448,29 +515,58 @@ namespace xc::renderer {
         glBindTexture(GL_TEXTURE_2D, texture.id);
     }
 
-    auto draw_texture(texture_t texture, rectangle_t region, glm::vec2 position, float angle, float scale) -> void {
+    auto draw_texture(texture_t texture, rectangle_t region, vector2_t position, float angle, float scale) -> void {
         if (bound_texture != texture.id) {
-           finish();
+            flush();
             bind_texture(texture);
             bound_texture = texture.id;
         }
 
-        auto mvp = glm::mat3(1.f);
-        mvp = glm::translate(mvp, position);
-        mvp = glm::rotate(mvp, glm::radians(angle));
-        mvp = glm::scale(mvp, glm::vec2(scale, scale));
-        mvp = glm::translate(mvp, -glm::vec2(region.w, region.h) / 2.f);
+        position = position - (vector2_t(region.w, region.h) / 2.f);
+        matrix3_t mvp = identity_t{};
 
-        auto left_uv = region.x / texture.w;
-        auto right_uv = (region.x + region.w) / texture.w;
-        auto top_uv = region.y / texture.h;
-        auto bottom_uv = (region.y + region.h) / texture.h;
+        // Scale
+        mvp = mvp * scaling_matrix(vector2_t{scale, scale});
 
-        vertices.emplace_back(vertex_t{mvp * glm::vec3(0.f, 0.f, 1.f), glm::vec2(left_uv, top_uv)});
-        vertices.emplace_back(vertex_t{mvp * glm::vec3(region.w, 0.f, 1.f), glm::vec2(right_uv, top_uv)});
-        vertices.emplace_back(vertex_t{mvp * glm::vec3(0.f, region.h, 1.f), glm::vec2(left_uv, bottom_uv)});
-        vertices.emplace_back(vertex_t{mvp * glm::vec3(region.w, region.h, 1.f), glm::vec2(right_uv, bottom_uv)});
+        // Rotate
+        mvp = mvp * translation_matrix(vector2_t{-(float)region.w / 2.f, -(float)region.h / 2.f}); // translate to origin
+        mvp = mvp * rotation_matrix(angle * DEG2RAD);
+        mvp = mvp * translation_matrix(vector2_t{(float)region.w / 2.f, (float)region.h / 2.f}); // translate back
+
+        // Translate
+        mvp = mvp * translation_matrix(vector2_t{position.x, position.y});
+
+        // Camera
+        mvp = mvp * translation_matrix(scene_camera);
+
+        auto left_uv = (float)region.x / (float)texture.w;
+        auto right_uv = (float)(region.x + region.w) / (float)texture.w;
+        auto top_uv = (float)region.y / (float)texture.h;
+        auto bottom_uv = (float)(region.y + region.h) / (float)texture.h;
+
+        auto x = mvp * vector3_t{0.f, 0.f, 1.f};
+        vertices[num_vertices++] = vertex_t{{x.x, x.y}, {left_uv, top_uv}};
+
+        x = mvp * vector3_t{static_cast<float>(region.w), 0.f, 1.f};
+        vertices[num_vertices++] = vertex_t{{x.x, x.y}, {right_uv, top_uv}};
+
+        x = mvp * vector3_t{0.f, static_cast<float>(region.h), 1.f};
+        vertices[num_vertices++] = vertex_t{{x.x, x.y}, {left_uv, bottom_uv}};
+
+        x = mvp * vector3_t{static_cast<float>(region.w), static_cast<float>(region.h), 1.f};
+        vertices[num_vertices++] = vertex_t{{x.x, x.y}, {right_uv, bottom_uv}};
 
         batch_count += 1u;
+    }
+
+
+
+    auto create_font(char const* path) -> font_t {
+        auto font = font_t{};
+        return font;
+    }
+
+    auto draw_text(char const* text, font_t font, vector2_t position) -> void {
+
     }
 } // namespace xc::renderer
