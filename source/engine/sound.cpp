@@ -17,7 +17,7 @@ ma_decoder decoder;
 
 namespace xc::sound {
     auto initialize() -> bool {
-        auto file = "../assets/HyperspacePanic.mp3";
+        auto file = "../assets/hyperspace.mp3";
         if (ma_decoder_init_file(file, nullptr, &decoder) != MA_SUCCESS) {
             SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Could not load file: %s", file);
             return false;
