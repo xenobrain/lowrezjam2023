@@ -231,7 +231,7 @@ struct vertex_t { xc::vector2_t position, texcoord; };
 
 
 #pragma region Renderer Constants
-auto static constexpr MAX_BATCHES = 128u;
+auto static constexpr MAX_BATCHES = 256u;
 auto static constexpr INDICES_PER_QUAD = 6u;
 auto static constexpr VERTICES_PER_QUAD = 4u;
 auto static constexpr MAX_INDICES = INDICES_PER_QUAD * MAX_BATCHES;
@@ -255,16 +255,6 @@ xc::vector2_t static scene_camera;
 auto static set_view_bounds(float width, float height) -> void {
     xc::renderer::bind_shader(shader);
     xc::renderer::set_shader_uniform(shader, "projection", xc::orthographic(0.f, width, 0.f, height, -1.f, 1.f));
-}
-
-auto static flush() -> void {
-    if (num_vertices == 0u) return;
-
-    GL_CALL(glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices));
-    GL_CALL(glDrawElements(GL_TRIANGLES, batch_count * INDICES_PER_QUAD, GL_UNSIGNED_SHORT, nullptr));
-
-    num_vertices = 0u;
-    batch_count = 0u;
 }
 
 
@@ -324,8 +314,6 @@ namespace xc::renderer {
         GL_CALL(glVertexAttribPointer(texcoord_attribute, 2, GL_FLOAT, GL_FALSE, sizeof(vertex_t), reinterpret_cast<void*>(2 * sizeof(float))));
 
 
-
-        /*
         // Generate and bind FBO
         GL_CALL(glGenFramebuffers(1, &fbo));
         GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
@@ -333,11 +321,10 @@ namespace xc::renderer {
         // Generate and attach a texture to the FBO
         GL_CALL(glGenTextures(1, &fbo_texture));
         GL_CALL(glBindTexture(GL_TEXTURE_2D, fbo_texture));
-        GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+        GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
         GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
         GL_CALL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbo_texture, 0));
-
 
          // Check FBO status
          if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -345,7 +332,6 @@ namespace xc::renderer {
          }
 
          glBindFramebuffer(GL_FRAMEBUFFER, 0);
-         */
 
         return true;
     }
@@ -362,15 +348,30 @@ namespace xc::renderer {
     }
 
     auto begin() -> void {
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, 64,  64);
+        //GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, fbo));
+        //glViewport(0, 0, 64,  64);
     }
 
     auto end() -> void {
-        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
-        glViewport(0, 0, 640, 640);
+        //flush();
+        //GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+        //glViewport(0, 0, 640, 640);
 
-        draw_texture({fbo_texture, 64, 64}, {0u, 0u, 64u, 64u}, {0.f, 0.f}, 0.f, 1.f);
+        // mipmaps?
+        //GL_CALL(glGenerateMipmap(fbo_texture));
+
+        //draw_texture({fbo_texture, 64, 64}, {0u, 0u, 64u, 64u}, {320.f, 320.f}, 0.f, 1.f);
+        flush();
+    }
+
+    auto flush() -> void {
+        if (num_vertices == 0u) return;
+
+        GL_CALL(glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices));
+        GL_CALL(glDrawElements(GL_TRIANGLES, batch_count * INDICES_PER_QUAD, GL_UNSIGNED_SHORT, nullptr));
+
+        num_vertices = 0u;
+        batch_count = 0u;
     }
 
     auto tick() -> void {
@@ -515,12 +516,13 @@ namespace xc::renderer {
         glBindTexture(GL_TEXTURE_2D, texture.id);
     }
 
+
     auto draw_texture(texture_t texture, rectangle_t region, vector2_t position, float angle, float scale) -> void {
         if (bound_texture != texture.id) {
             flush();
             bind_texture(texture);
             bound_texture = texture.id;
-        }
+       }
 
         position = position - (vector2_t(region.w, region.h) / 2.f);
         matrix3_t mvp = identity_t{};
@@ -559,12 +561,6 @@ namespace xc::renderer {
         batch_count += 1u;
     }
 
-
-
-    auto create_font(char const* path) -> font_t {
-        auto font = font_t{};
-        return font;
-    }
 
     auto draw_text(char const* text, font_t font, vector2_t position) -> void {
 

@@ -16,6 +16,7 @@ namespace xc::renderer {
     auto tick() -> void;
 
     auto clear(color_t color) -> void;
+    auto flush() -> void;
     auto swap() -> void;
 
     auto set_camera(vector2_t camera) -> void;
